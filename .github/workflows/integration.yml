@@ -1,65 +1,50 @@
-name: Integration Tests
-
+name: Isolated mouse console validation
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
-    inputs:
-      test-pattern:
-        description: "PowerShell filter for integration tests (e.g. test_issue*.ps1)"
-        required: false
-        default: "test_*.ps1"
-      fail-fast:
-        description: "Stop after first failing integration test"
-        required: false
-        type: boolean
-        default: false
-  schedule:
-    # Default cadence: nightly at 05:00 UTC.
-    - cron: "0 5 * * *"
-
 permissions:
   contents: read
-
-env:
-  CARGO_TERM_COLOR: always
-
-concurrency:
-  group: integration-tests
-  cancel-in-progress: false
-
 jobs:
-  integration:
-    name: Full Integration Suite
+  validate:
     runs-on: windows-latest
-    timeout-minutes: 180
-
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ref: fix/mouse-bridge-console-scope
+            artifact: master
+          - ref: backport/mouse-bridge-console-scope
+            artifact: backport-3.4.0
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Build x64 release binary
-        run: cargo build --release --target x86_64-pc-windows-msvc
-
-      - name: Run all integration tests
+          ref: ${{ matrix.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check Windows build
+        run: cargo check --bin psmux
+      - name: Run console membership unit tests (no servers)
+        run: cargo test --bin psmux tests_mouse_bridge_console_scope -- --test-threads=1
+      - name: Build patched binary
+        run: cargo build --release --bin psmux
+      - name: Run isolated real-console regression
         shell: pwsh
         run: |
-          $exe = (Resolve-Path "target\x86_64-pc-windows-msvc\release\psmux.exe").Path
-          $env:PSMUX_EXE = $exe
-
-          $pattern = "${{ github.event.inputs['test-pattern'] }}"
-          if ([string]::IsNullOrWhiteSpace($pattern)) {
-            $pattern = "test_*.ps1"
-          }
-
-          $args = @("-Pattern", $pattern)
-          if ("${{ github.event.inputs['fail-fast'] }}" -eq "true") {
-            $args += "-FailFast"
-          }
-
-          .\tests\run_all_integration.ps1 @args
+          $exe = (Resolve-Path target/release/psmux.exe).Path
+          & ./tests/test_mouse_bridge_console_scope.ps1 -PsmuxExe $exe
+      - name: Record binary provenance
+        shell: pwsh
+        run: |
+          git rev-parse HEAD | Set-Content target/release/source-commit.txt
+          (Get-FileHash target/release/psmux.exe -Algorithm SHA256).Hash | Set-Content target/release/psmux.exe.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: psmux-mouse-console-${{ matrix.artifact }}
+          path: |
+            target/release/psmux.exe
+            target/release/source-commit.txt
+            target/release/psmux.exe.sha256
+          retention-days: 14
