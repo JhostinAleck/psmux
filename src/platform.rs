@@ -1786,7 +1786,7 @@ pub mod mouse_inject {
                 pids.resize(n as usize, 0);
                 n = GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32);
             }
-            detach_console();
+            FreeConsole();
             if had_console { reattach_parent_console(); }
             if n == 0 || n as usize > pids.len() { return None; }
             pids.truncate(n as usize);
